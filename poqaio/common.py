@@ -1,11 +1,8 @@
 import enum
 
-from ._poqaio import Error
-
-_protocol_vals = [ord('I'), ord('T'), ord('E')]
-
 
 class TransactionStatus(enum.Enum):
+    UNKNOWN = '\0'
     IDLE = 'I'
     TRANSACTION = 'T'
     ERROR = 'E'

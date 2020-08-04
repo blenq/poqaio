@@ -3,6 +3,7 @@ import getpass
 import os.path
 import sys
 
+from .common import TransactionStatus
 from .protocol import PGProtocol
 
 
@@ -23,37 +24,45 @@ class Connection:
         self.user = user
         self._application_name = application_name or fallback_application_name
 
-    async def _startup(self):
+    async def _startup(self, password):
         await self._protocol.startup(
-            self.user, self.database, self._application_name)
+            self.user, self.database, self._application_name, password)
 
     @property
     def application_name(self):
-        return self._protocol.parameters.get('application_name')
-
+        return self.status_parameters.get('application_name')
+# 
     @property
     def date_style(self):
-        return self._protocol.date_style
-
-    @property
-    def client_encoding(self):
-        return self._protocol.client_encoding
-
-    @property
-    def integer_datetimes(self):
-        return self._protocol.integer_datetimes
+        return self.status_parameters.get('DateStyle')
+# 
+#     @property
+#     def client_encoding(self):
+#         return self._protocol.client_encoding
+# 
+#     @property
+#     def integer_datetimes(self):
+#         return self._protocol.integer_datetimes
 
     @property
     def is_superuser(self):
-        return self._protocol.parameters.get('is_superuser') == 'on'
+        return self.status_parameters.get('is_superuser') == 'on'
 
     @property
     def time_zone(self):
-        return self._protocol.parameters.get("TimeZone")
-
+        return self.status_parameters.get("TimeZone")
+ 
     @property
     def server_version(self):
-        return self._protocol.parameters.get("server_version")
+        return self.status_parameters.get("server_version")
+
+    @property
+    def transaction_status(self):
+        return TransactionStatus(self._protocol.transaction_status)
+
+    @property
+    def status_parameters(self):
+        return self._protocol.status_parameters
 
     async def execute(self, query, parameters=None):
         return await self._protocol.execute(query, parameters)
@@ -94,6 +103,8 @@ async def connect(
         path = host
     elif host.startswith("/"):
         path = f"{host}{'' if host.endswith('/') else '/'}.s.PGSQL.{port}"
+    else:
+        path = None
     if path is not None:
         _, protocol = await loop.create_unix_connection(
             PGProtocol, path, **conn_kwargs)
@@ -107,5 +118,5 @@ async def connect(
         protocol, host, port, database, user, application_name,
         fallback_application_name)
 
-    await conn._startup()
+    await conn._startup(password)
     return conn

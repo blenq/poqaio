@@ -1,9 +1,10 @@
 import asyncio
 from codecs import decode
+import hashlib
 import struct
 
 from ._poqaio import BaseProt, ServerError, ProtocolError
-from .common import TransactionStatus, Severity
+from .common import Severity
 from . import numeric
 from .text import convert_any_param, convert_str_param
 from . import public_const
@@ -77,18 +78,9 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
         self.loop = asyncio.get_running_loop()
 #         self.received_bytes = 0
 
-        self.parameters = {}
-        self.client_encoding = None
-        self.date_style = None
-        self.integer_datetimes = None
-        self.starting_up = True
-        self.error = None
         self.out_buffer = memoryview(bytearray(BUFFER_SIZE))
         self.results = None
         self.result = None
-
-    def connection_made(self, transport):
-        self.transport = transport
 
     def connection_lost(self, exc):
         if self.error:
@@ -118,50 +110,70 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
                 f"{len(self.message)}.")
 
     def handle_auth_req(self):
+        # clear password from the object
+        password = self.password
+
         specifier = self.int_struct.unpack_from(self.message)[0]
-        if specifier != 0:
-            self.fut.set_exception(NotImplementedError(
-                f"Unknown authentication specifier: {specifier}"))
-            self.transport.close()
-
-    def handle_backend_key(self):
-        self.backend_process_id, self.backed_secret_key = (
-            self.intint_struct.unpack(self.message))
-
-    def handle_ready(self):
-        self.check_length_equal(1)
-        value = self.message[0]
-        try:
-            self.transaction_status = TransactionStatus._from_protocol(value)
-        except Exception:
-            raise ProtocolError("Invalid transaction status in ready message")
-        if self.starting_up:
-            self.starting_up = False
-        if self.error:
-            self.fut.set_exception(self.error)
-            self.error = None
-        else:
-            self.set_result(self.results)
-            self.results = None
-
-    def handle_parameter_status(self):
-        # format: "{param_name}\0{param_value}\0"
-
-        param = decode(self.message)
-        param = param.split('\0')
-        if len(param) != 3 or param[2] != '':
-            self.set_exception(
-                ProtocolError("Invalid parameter status message"))
+        if specifier == 0:
+            self.check_length_equal(4)
             return
-        name, val = param[:2]
-        if name == "client_encoding":
-            self.client_encoding = val
-        elif name == "DateStyle":
-            self.date_style = val
-        elif name == "integer_datetimes":
-            self.integer_datetimes = (val == 'on')
-        else:
-            self.parameters[name] = val
+        if specifier == 5:
+            self.check_length_equal(8)
+            user = self.user
+            if password is None:
+                raise ProtocolError("Missing password")
+            salt = struct.unpack_from("4s", self.message, 4)[0]
+            if isinstance(password, str):
+                password = password.encode()
+            if isinstance(user, str):
+                user = user.encode()
+            password = (
+                b'md5' + hashlib.md5(
+                    hashlib.md5(password + user).hexdigest().encode() + salt
+                ).hexdigest().encode())
+
+            pw_len = len(password) + 1
+            struct_fmt = f'!ci{pw_len}s'
+            data = struct.pack(struct_fmt, b'p', pw_len + 4, password)
+            self.transport.write(data)
+            return
+        raise ProtocolError(
+            f"Unknown authentication specifier: {specifier}")
+
+#     def handle_ready(self):
+#         self.check_length_equal(1)
+#         value = self.message[0]
+#         try:
+#             self.transaction_status = TransactionStatus._from_protocol(value)
+#         except Exception:
+#             raise ProtocolError("Invalid transaction status in ready message")
+#         if self.starting_up:
+#             self.starting_up = False
+#         if self.error:
+#             self.fut.set_exception(self.error)
+#             self.error = None
+#         else:
+#             self.set_result(self.results)
+#             self.results = None
+
+#     def handle_parameter_status(self):
+#         # format: "{param_name}\0{param_value}\0"
+# 
+#         param = decode(self.message)
+#         param = param.split('\0')
+#         if len(param) != 3 or param[2] != '':
+#             self.set_exception(
+#                 ProtocolError("Invalid parameter status message"))
+#             return
+#         name, val = param[:2]
+#         if name == "client_encoding":
+#             self.client_encoding = val
+#         elif name == "DateStyle":
+#             self.date_style = val
+#         elif name == "integer_datetimes":
+#             self.integer_datetimes = (val == 'on')
+#         else:
+#             self.parameters[name] = val
 
     def handle_error(self):
         # format: "({error_field_code:char}{error_field_value}\0)+\0"
@@ -258,14 +270,14 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
         msg = self.message
         num_fields = self.short_struct.unpack_from(msg)[0]
         if num_fields != len(fields):
-            self.set_exception(ProtocolError("Invalid data row"))
+            raise ProtocolError("Invalid data row 1")
         msg_len = len(msg)
 
         def get_fields():
             pos = 2
             for field in fields:
                 if pos >= msg_len:
-                    raise ProtocolError("Invalid data row")
+                    raise ProtocolError("Invalid data row 2")
                 val_len = self.int_struct.unpack_from(msg, pos)[0]
                 pos += 4
 
@@ -276,7 +288,7 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
                     pos += val_len
 
             if pos != msg_len:
-                raise ProtocolError("Invalid data row")
+                raise ProtocolError("Invalid data row 3")
 
         result["data"].append(tuple(get_fields()))
 
@@ -298,68 +310,70 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
         result["command_status"] = decode(msg[:-1])
         self.result = None
 
-    def handle_parse_complete(self):
-        # print("Parse complete")
-        pass
+#     def handle_parse_complete(self):
+#         # print("Parse complete")
+#         pass
+# 
+#     def handle_bind_complete(self):
+#         # print("Bind complete")
+#         pass
 
-    def handle_bind_complete(self):
-        # print("Bind complete")
-        pass
+#     def handle_no_data(self):
+#         self.check_length_equal(0)
 
-    handle_message_49 = handle_parse_complete
-    handle_message_50 = handle_bind_complete
+#     handle_message_49 = handle_parse_complete
+#     handle_message_50 = handle_bind_complete
     handle_message_67 = handle_command_complete
     handle_message_68 = handle_data_row
     handle_message_69 = handle_error
-    handle_message_75 = handle_backend_key
     handle_message_78 = handle_notice
     handle_message_82 = handle_auth_req
-    handle_message_83 = handle_parameter_status
+#     handle_message_83 = handle_parameter_status
     handle_message_84 = handle_row_description
-    handle_message_90 = handle_ready
+#     handle_message_110 = handle_no_data
+#     handle_message_90 = handle_ready
 
     def handle_message(self):
-
         handle_method = getattr(
             self, f"handle_message_{self.identifier}", None)
         if handle_method is None:
             self.set_exception(
                 ValueError(f"Unknown identier: {chr(self.identifier)}"))
             return
-        try:
-            handle_method()
-        except Exception as ex:
-            self.set_exception(ex)
+        handle_method()
 
-    def startup(self, user, database, application_name):
-        parameters = []
-        struct_format = ["!ii"]
-
-        def add_parameter(name, value):
-            if not value:
-                return
-
-            name = name.encode()
-            value = value.encode()
-            struct_format.extend([f"{len(name) + 1}s", f"{len(value) + 1}s"])
-
-            parameters.extend([name, value])
-
-        for name, value in [
-                ("user", user),
-                ("database", database),
-                ("application_name", application_name),
-                ("DateStyle", "ISO"),
-                ("client_encoding", "UTF8\0")]:
-            if value:
-                add_parameter(name, value)
-
-        msg_struct = struct.Struct(''.join(struct_format))
-        message = msg_struct.pack(msg_struct.size, 196608, *parameters)
-
-        self.transport.write(message)
-        self.fut = self.loop.create_future()
-        return self.fut
+#     def startup(self, user, database, application_name, password):
+#         parameters = []
+#         struct_format = ["!ii"]
+# 
+#         def add_parameter(name, value):
+#             if not value:
+#                 return
+# 
+#             name = name.encode()
+#             value = value.encode()
+#             struct_format.extend([f"{len(name) + 1}s", f"{len(value) + 1}s"])
+# 
+#             parameters.extend([name, value])
+# 
+#         for name, value in [
+#                 ("user", user),
+#                 ("database", database),
+#                 ("application_name", application_name),
+#                 ("DateStyle", "ISO"),
+#                 ("client_encoding", "UTF8\0")]:
+#             if value:
+#                 add_parameter(name, value)
+# 
+#         msg_struct = struct.Struct(''.join(struct_format))
+#         message = msg_struct.pack(msg_struct.size, 196608, *parameters)
+# 
+#         self.user = user
+#         self.password = password
+# 
+#         self.transport.write(message)
+#         self.fut = self.loop.create_future()
+#         return self.fut
 
     def get_wire_param(self, val):
         converter = param_converters.get(type(val), convert_any_param)
@@ -372,6 +386,7 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
         return oid, len(val), val, 0
 
     def execute(self, query, parameters):
+        self.results = None
         query = query.encode()
         query_len = len(query) + 1  # includes zero terminator
 

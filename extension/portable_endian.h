@@ -55,7 +55,6 @@
 #elif defined(__WINDOWS__)
 
 #	include <winsock2.h>
-#	include <sys/param.h>
 
 #	if BYTE_ORDER == LITTLE_ENDIAN
 
@@ -64,9 +63,9 @@
 #		define be16toh(x) ntohs(x)
 #		define le16toh(x) (x)
 
-#		define htobe32(x) htonl(x)
+#		define htobe32(x) _byteswap_ulong(x)
 #		define htole32(x) (x)
-#		define be32toh(x) ntohl(x)
+#		define be32toh(x) _byteswap_ulong(x)
 #		define le32toh(x) (x)
 
 #		define htobe64(x) htonll(x)
