@@ -79,8 +79,8 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
 #         self.received_bytes = 0
 
         self.out_buffer = memoryview(bytearray(BUFFER_SIZE))
-        self.results = None
-        self.result = None
+#         self.results = None
+#         self.result = None
 
     def connection_lost(self, exc):
         if self.error:
@@ -219,40 +219,40 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
     def handle_notice(self):
         pass
 
-    def handle_row_description(self):
-        fields = []
-        result = self.get_current_result()
-        result.update(data=[], fields=fields)
-
-        msg_len = len(self.message)
-        num_fields = self.short_struct.unpack_from(self.message)[0]
-        pos = 2
-        buffer = bytes(self.message)
-        for _ in range(num_fields):
-            if pos >= msg_len:
-                raise ProtocolError("Invalid row description")
-            try:
-                zidx = buffer.index(0, pos)
-            except ValueError:
-                raise ProtocolError("Invalid row description")
-            field_name = decode(self.message[pos:zidx])
-            pos = zidx + 1
-            if pos >= msg_len:
-                raise ProtocolError("Invalid row description")
-            field_struct = struct.Struct(f"!IhIhih")
-            field = field_struct.unpack_from(buffer, pos)
-            fields.append({
-                "field_name": field_name,
-                "table_oid": field[0],
-                "col_num": field[1],
-                "type_oid": field[2],
-                "typ_size": field[3],
-                "typ_mod": field[4],
-                "format": field[5],
-                })
-            pos += field_struct.size
-        if pos != msg_len:
-            raise ProtocolError("Invalid row description")
+#     def handle_row_description(self):
+#         fields = []
+#         result = self.get_current_result()
+#         result.update(data=[], fields=fields)
+# 
+#         msg_len = len(self.message)
+#         num_fields = self.short_struct.unpack_from(self.message)[0]
+#         pos = 2
+#         buffer = bytes(self.message)
+#         for _ in range(num_fields):
+#             if pos >= msg_len:
+#                 raise ProtocolError("Invalid row description")
+#             try:
+#                 zidx = buffer.index(0, pos)
+#             except ValueError:
+#                 raise ProtocolError("Invalid row description")
+#             field_name = decode(self.message[pos:zidx])
+#             pos = zidx + 1
+#             if pos >= msg_len:
+#                 raise ProtocolError("Invalid row description")
+#             field_struct = struct.Struct(f"!IhIhih")
+#             field = field_struct.unpack_from(buffer, pos)
+#             fields.append({
+#                 "field_name": field_name,
+#                 "table_oid": field[0],
+#                 "col_num": field[1],
+#                 "type_oid": field[2],
+#                 "typ_size": field[3],
+#                 "typ_mod": field[4],
+#                 "format": field[5],
+#                 })
+#             pos += field_struct.size
+#         if pos != msg_len:
+#             raise ProtocolError("Invalid row description")
 
     def convert_data(self, value, field):
         if field["format"] == 0:
@@ -264,51 +264,51 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
         else:
             return bytes(value)
 
-    def handle_data_row(self):
-        result = self.result
-        fields = result["fields"]
-        msg = self.message
-        num_fields = self.short_struct.unpack_from(msg)[0]
-        if num_fields != len(fields):
-            raise ProtocolError("Invalid data row 1")
-        msg_len = len(msg)
+#     def handle_data_row(self):
+#         result = self.result
+#         fields = result["fields"]
+#         msg = self.message
+#         num_fields = self.short_struct.unpack_from(msg)[0]
+#         if num_fields != len(fields):
+#             raise ProtocolError("Invalid data row 1")
+#         msg_len = len(msg)
+# 
+#         def get_fields():
+#             pos = 2
+#             for field in fields:
+#                 if pos >= msg_len:
+#                     raise ProtocolError("Invalid data row 2")
+#                 val_len = self.int_struct.unpack_from(msg, pos)[0]
+#                 pos += 4
+# 
+#                 if val_len == -1:
+#                     yield None
+#                 else:
+#                     yield self.convert_data(msg[pos:pos + val_len], field)
+#                     pos += val_len
+# 
+#             if pos != msg_len:
+#                 raise ProtocolError("Invalid data row 3")
+# 
+#         result["data"].append(tuple(get_fields()))
 
-        def get_fields():
-            pos = 2
-            for field in fields:
-                if pos >= msg_len:
-                    raise ProtocolError("Invalid data row 2")
-                val_len = self.int_struct.unpack_from(msg, pos)[0]
-                pos += 4
+#     def get_current_result(self):
+#         if self.result is not None:
+#             return self.result
+#         result = self.result = {
+#             "fields": None, "data": None, "command_status": None}
+#         if self.results is None:
+#             self.results = []
+#         self.results.append(result)
+#         return result
 
-                if val_len == -1:
-                    yield None
-                else:
-                    yield self.convert_data(msg[pos:pos + val_len], field)
-                    pos += val_len
-
-            if pos != msg_len:
-                raise ProtocolError("Invalid data row 3")
-
-        result["data"].append(tuple(get_fields()))
-
-    def get_current_result(self):
-        if self.result is not None:
-            return self.result
-        result = self.result = {
-            "fields": None, "data": None, "command_status": None}
-        if self.results is None:
-            self.results = []
-        self.results.append(result)
-        return result
-
-    def handle_command_complete(self):
-        msg = self.message
-        if msg[-1] != 0:
-            raise ProtocolError("Invalid command complete")
-        result = self.get_current_result()
-        result["command_status"] = decode(msg[:-1])
-        self.result = None
+#     def handle_command_complete(self):
+#         msg = self.message
+#         if msg[-1] != 0:
+#             raise ProtocolError("Invalid command complete")
+#         result = self.get_current_result()
+#         result["command_status"] = decode(msg[:-1])
+#         self.result = None
 
 #     def handle_parse_complete(self):
 #         # print("Parse complete")
@@ -323,13 +323,13 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
 
 #     handle_message_49 = handle_parse_complete
 #     handle_message_50 = handle_bind_complete
-    handle_message_67 = handle_command_complete
-    handle_message_68 = handle_data_row
+#     handle_message_67 = handle_command_complete
+#     handle_message_68 = handle_data_row
     handle_message_69 = handle_error
     handle_message_78 = handle_notice
     handle_message_82 = handle_auth_req
 #     handle_message_83 = handle_parameter_status
-    handle_message_84 = handle_row_description
+#     handle_message_84 = handle_row_description
 #     handle_message_110 = handle_no_data
 #     handle_message_90 = handle_ready
 
@@ -386,7 +386,7 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
         return oid, len(val), val, 0
 
     def execute(self, query, parameters):
-        self.results = None
+#         self.results = None
         query = query.encode()
         query_len = len(query) + 1  # includes zero terminator
 

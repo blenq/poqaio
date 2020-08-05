@@ -6,3 +6,6 @@
 extern PyObject *PoqaioError;
 extern PyObject *PoqaioServerError;
 extern PyObject *PoqaioProtocolError;
+
+extern PyTypeObject *FieldDescription;
+extern PyTypeObject *Result;

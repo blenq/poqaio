@@ -58,9 +58,9 @@
 
 #	if BYTE_ORDER == LITTLE_ENDIAN
 
-#		define htobe16(x) htons(x)
+#		define htobe16(x) _byteswap_ushort(x)
 #		define htole16(x) (x)
-#		define be16toh(x) ntohs(x)
+#		define be16toh(x) _byteswap_ushort(x)
 #		define le16toh(x) (x)
 
 #		define htobe32(x) _byteswap_ulong(x)

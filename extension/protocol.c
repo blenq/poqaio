@@ -23,9 +23,13 @@ typedef struct {
     PyObject *transport;
     PyObject *fut;
 
+    int16_t result_nfields;
+    PyObject *results;
+    PyObject *result_fields;
+    PyObject *result_data;
+
     PyObject *message;    // remove when not used anymore
     PyObject *header;
-    PyObject *results;
     PyObject *error;
     PyObject *status_parameters;
     PyObject *wr_list;
@@ -73,7 +77,7 @@ BaseProt_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         self->receiving_header = 1;
         self->msg_length = HEADER_SIZE;  // size of header
         Py_INCREF(Py_None);
-        self->results = Py_None;
+//        self->results = Py_None;
     }
     return (PyObject *) self;
 }
@@ -103,11 +107,109 @@ BaseProt_connection_made(BaseProt *self, PyObject *args) {
 }
 
 
+static int
+check_length_gte(BaseProt *self, char *pos, ssize_t length) {
+
+    if ((MSG_END(self)) - pos < length) {
+        char identifier[2] = {self->buf_in_use[0], '\0'};
+
+        PyErr_Format(
+            PoqaioProtocolError,
+            "Invalid length for message with identifier '%s'. Expected %zu or "
+            "more, but got %zu.",
+            identifier, length, MSG_END(self) - pos);
+        return -1;
+    }
+    return 0;
+}
+
+
+static uint16_t
+read_uint16(char **from) {
+    uint16_t val;
+    memcpy(&val, *from, sizeof(val));
+    *from += sizeof(val);
+    return be16toh(val);
+}
+
+
+static inline int16_t
+read_int16(char **from) {
+    return (int16_t)read_uint16(from);
+}
+
+
+static int
+read_uint16_check(BaseProt *self, char **from, uint16_t *val) {
+    if (check_length_gte(self, *from, sizeof(uint16_t)) == -1)
+        return -1;
+    *val = read_uint16(from);
+    return 0;
+}
+
+
+static inline int
+read_int16_check(BaseProt *self, char **from, int16_t *val) {
+    return read_uint16_check(self, from, (uint16_t *)val);
+}
+
+
+static inline PyObject *
+read_py_int16(char **from)
+{
+    return PyLong_FromLong(read_int16(from));
+}
+
+
 static int32_t
-read_int32(char *from) {
+get_int32(char *from) {
     uint32_t val;
     memcpy(&val, from, sizeof(uint32_t));
     return (int32_t)be32toh(val);
+}
+
+
+static uint32_t
+read_uint32(char **from) {
+    uint32_t val;
+    memcpy(&val, *from, sizeof(uint32_t));
+    *from += sizeof(val);
+    return be32toh(val);
+}
+
+
+static inline int32_t
+read_int32(char **from) {
+    return (int32_t)read_uint32(from);
+}
+
+
+static int
+read_uint32_check(BaseProt *self, char **from, uint32_t *val) {
+    if (check_length_gte(self, *from, sizeof(uint32_t)) == -1)
+        return -1;
+    *val = read_uint32(from);
+    return 0;
+}
+
+
+static inline int
+read_int32_check(BaseProt *self, char **from, int32_t *val) {
+    return read_uint32_check(self, from, (uint32_t *)val);
+}
+
+
+static inline PyObject *
+read_py_int32(char **from)
+{
+    return PyLong_FromLong(read_int32(from));
+}
+
+
+static inline PyObject *
+read_py_uint32(char **from)
+{
+    return PyLong_FromUnsignedLong(read_uint32(from));
 }
 
 
@@ -128,23 +230,19 @@ read_str(char **src, Py_ssize_t *len, size_t max_len)
 }
 
 
-//static int
-//read_pystr(char **src, PyObject **str, size_t max_len)
-//{
-//    char *term;
-//
-//    term = memchr(*src, '\0', max_len);
-//    if (term == NULL) {
-//        PyErr_SetString(PoqaioProtocolError, "Terminating zero not found");
-//        return -1;
-//    }
-//    *str = PyUnicode_FromStringAndSize(*src, term - *src);
-//    if (*str == NULL) {
-//        return -1;
-//    }
-//    *src = term + 1;  // position past terminator
-//    return 0;
-//}
+
+static PyObject *
+read_pystr(char **src, size_t max_len)
+{
+    Py_ssize_t len;
+    char* str;
+
+    str = read_str(src, &len, max_len);
+    if (str == NULL) {
+        return NULL;
+    }
+    return PyUnicode_FromStringAndSize(str, len);
+}
 
 
 static PyObject *
@@ -182,10 +280,7 @@ BaseProt_get_buffer(BaseProt *self, PyObject *args)
 static int
 check_length(BaseProt *self, int length) {
     if (length + HEADER_SIZE != self->msg_length) {
-        char identifier[2];
-
-        identifier[0] = self->buf_in_use[0];
-        identifier[1] = 0;
+        char identifier[2] = {self->buf_in_use[0], '\0'};
 
         PyErr_Format(
             PoqaioProtocolError,
@@ -197,6 +292,7 @@ check_length(BaseProt *self, int length) {
     return 0;
 }
 
+
 static int
 handle_backend_key(BaseProt *self) {
 
@@ -204,8 +300,8 @@ handle_backend_key(BaseProt *self) {
         return -1;
     }
 
-    self->backend_process_id = read_int32(MSG_START(self));
-    self->backend_secret_key = read_int32(MSG_START(self) + 4);
+    self->backend_process_id = get_int32(MSG_START(self));
+    self->backend_secret_key = get_int32(MSG_START(self) + 4);
     return 0;
 }
 
@@ -279,8 +375,284 @@ end:
 
 
 static int
+handle_row_description(BaseProt *self) {
+    char *pos;
+    int16_t nfields;
+    int i;
+    PyObject *fields;
+
+    printf("Row description\n");
+    pos = MSG_START(self);
+
+    if (read_int16_check(self, &pos, &nfields) == -1) {
+        return -1;
+    }
+    printf("nfields: %d\n", (int) nfields);
+    printf("Row description 4\n");
+
+    fields = PyTuple_New(nfields);
+    if (fields == NULL) {
+        return -1;
+    }
+    printf("Row description 3\n");
+    for (i = 0; i < nfields; i++) {
+        PyObject *field_desc, *field_val;
+
+        // Make a new field description and add to fields tuple
+        field_desc = PyStructSequence_New(FieldDescription);
+        if (field_desc == NULL) {
+            goto error;
+        }
+        PyTuple_SET_ITEM(fields, i, field_desc);
+
+        printf("Row description 5\n");
+
+        // get field name
+        field_val = read_pystr(&pos, MSG_END(self) - pos);
+        if (field_val == NULL) {
+            goto error;
+        }
+        PyStructSequence_SET_ITEM(field_desc, 0, field_val);
+
+        printf("Row description 6\n");
+
+        // can we get the rest?
+        if (MSG_END(self) - pos < 18) {
+            PyErr_SetString(PoqaioProtocolError, "Invalid field description.");
+            goto error;
+        }
+
+        // table oid
+        field_val = read_py_uint32(&pos);
+        if (field_val == NULL) {
+            goto error;
+        }
+        PyStructSequence_SET_ITEM(field_desc, 5, field_val);
+
+        // column number (in originating table)
+        field_val = read_py_int16(&pos);
+        if (field_val == NULL) {
+            goto error;
+        }
+        PyStructSequence_SET_ITEM(field_desc, 6, field_val);
+
+        // data type oid
+        field_val = read_py_uint32(&pos);
+        if (field_val == NULL) {
+            goto error;
+        }
+        PyStructSequence_SET_ITEM(field_desc, 1, field_val);
+
+        // data type size
+        field_val = read_py_int16(&pos);
+        if (field_val == NULL) {
+            goto error;
+        }
+        PyStructSequence_SET_ITEM(field_desc, 2, field_val);
+
+        // data type modifier
+        field_val = read_py_int32(&pos);
+        if (field_val == NULL) {
+            goto error;
+        }
+        PyStructSequence_SET_ITEM(field_desc, 3, field_val);
+
+        // field format
+        field_val = read_py_int16(&pos);
+        if (field_val == NULL) {
+            goto error;
+        }
+        PyStructSequence_SET_ITEM(field_desc, 4, field_val);
+    }
+    printf("Row description 2");
+
+    if (pos != MSG_END(self)) {
+        PyErr_SetString(
+            PoqaioProtocolError, "Invalid field description, data remaining.");
+        goto error;
+    }
+    self->result_data = PyList_New(0);
+    if (self->result_data == NULL) {
+        goto error;
+    }
+    self->result_nfields = nfields;
+    self->result_fields = fields;
+    return 0;
+
+error:
+    Py_DECREF(fields);
+    return -1;
+}
+
+
+static int
+handle_data_row(BaseProt *self) {
+    int i, ret=-1;
+    char *pos;
+    int16_t nfields;
+    PyObject *row;
+
+    printf("Data row 1\n");
+
+    if (self->error) {
+        // Error already set, ignore message
+        return 0;
+    }
+    printf("Data row 3\n");
+
+    if (self->result_data == NULL) {
+        PyErr_SetString(
+            PoqaioProtocolError,
+            "Invalid state for data row."
+            );
+    }
+    printf("Data row 2\n");
+
+    pos = MSG_START(self);
+
+    // Get number of fields
+    if (read_int16_check(self, &pos, &nfields) == -1)
+        return -1;
+
+    if (nfields != self->result_nfields) {
+        PyErr_SetString(
+            PoqaioProtocolError,
+            "Invalid data row, number of values differs from row description."
+            );
+    }
+    row = PyTuple_New(nfields);
+    if (row == NULL) {
+        return -1;
+    }
+    for (i = 0; i < nfields; i++) {
+        PyObject *val;
+        int32_t val_size;
+
+        // Get value size
+        if (read_int32_check(self, &pos, &val_size) == -1)
+            return -1;
+
+        if (val_size == -1) {
+            // Easy, just None
+            val = Py_None;
+            Py_INCREF(val);
+        }
+        else {
+            if (check_length_gte(self, pos, val_size) == -1) {
+                PyErr_SetString(
+                    PoqaioProtocolError,
+                    "Invalid data row, value size larger than data."
+                    );
+                goto error;
+            }
+            // Add string, TODO: convert string
+            val = PyUnicode_FromStringAndSize(pos, val_size);
+            if (val == NULL) {
+                goto error;
+            }
+            pos += val_size;
+        }
+        PyTuple_SET_ITEM(row, i, val);
+    }
+    if (pos != MSG_END(self)) {
+        PyErr_SetString(
+            PoqaioProtocolError, "Invalid field description, data remaining.");
+        goto error;
+    }
+
+    if (PyList_Append(self->result_data, row) == -1)
+        goto error;
+
+    ret = 0;
+
+error:
+    Py_DECREF(row);
+    return ret;
+}
+
+
+static int
+handle_command_complete(BaseProt *self) {
+    char *pos;
+    PyObject *py_val, *result, *results;
+
+    printf("Complete 1\n");
+    result = PyStructSequence_New(Result);
+    if (result == NULL) {
+        return -1;
+    }
+    printf("Complete 2\n");
+
+    pos = MSG_START(self);
+
+    // fields
+    py_val = self->result_fields;
+    if (py_val == NULL) {
+        py_val = Py_None;
+        Py_INCREF(Py_None);
+    }
+    else {
+        self->result_fields = NULL;
+    }
+    PyStructSequence_SET_ITEM(result, 0, py_val);
+
+    // data
+    py_val = self->result_data;
+    if (py_val == NULL) {
+        py_val = Py_None;
+        Py_INCREF(Py_None);
+    }
+    else {
+        // no decref, sequence will steal
+        self->result_data = NULL;
+    }
+    PyStructSequence_SET_ITEM(result, 1, py_val);
+    printf("Complete 3\n");
+
+    // tag
+    py_val = read_pystr(&pos, MSG_END(self) - pos);
+    if (py_val == NULL) {
+        goto error;
+    }
+    PyStructSequence_SET_ITEM(result, 2, py_val);
+
+    printf("Complete 4\n");
+
+    // add result to result list
+    results = self->results;
+    if (results == NULL) {
+        printf("Complete creating list\n");
+
+        results = PyList_New(1);
+        if (results == NULL) {
+            goto error;
+        }
+        printf("Complete list created\n");
+
+        self->results = results;
+        PyList_SET_ITEM(results, 0, result);
+    }
+    else {
+        printf("Existing list\n");
+        if (PyList_Append(results, result) == -1) {
+            goto error;
+        }
+        Py_DECREF(result);
+        printf("Existing list done\n");
+    }
+    return 0;
+
+error:
+    Py_DECREF(result);
+    return -1;
+}
+
+
+static int
 handle_ready(BaseProt *self) {
     char status;
+
+    printf("Handling ready\n");
 
     if (check_length(self, 1) == -1) {
         return -1;
@@ -300,6 +672,7 @@ handle_ready(BaseProt *self) {
             status_string);
         return -1;
     }
+    printf("Handling ready 2\n");
 
     PyObject *py_done;
     int done;
@@ -315,11 +688,13 @@ handle_ready(BaseProt *self) {
     int ret = 0;
 
     if (self->error) {
+        printf("Handling ready: error\n");
         if (!done) {
-
+            printf("Handling ready: setting error\n");
             res = PyObject_CallMethod(
                     self->fut, "set_exception", "O", self->error);
             if (res == NULL) {
+                printf("Handling ready: oops\n");
                 ret = -1;
             }
             else {
@@ -327,11 +702,27 @@ handle_ready(BaseProt *self) {
             }
         }
         Py_CLEAR(self->error);
+        Py_CLEAR(self->results);
     }
     else {
+        printf("Handling ready: no error\n");
+
         if (!done) {
+            PyObject *result;
+
+            printf("Setting result\n");
+            if (self->results == NULL) {
+                result = Py_None;
+                Py_INCREF(result);
+            }
+            else {
+                result = self->results;
+                self->results = NULL;
+            }
             res = PyObject_CallMethod(
-                self->fut, "set_result", "O", self->results);
+                self->fut, "set_result", "O", result);
+            Py_DECREF(result);
+
             if (res == NULL) {
                 ret = -1;
             }
@@ -348,6 +739,10 @@ static int
 handle_message(BaseProt *self) {
     PyObject *ret;
     int res;
+    char cmd[2] = {self->buf_in_use[0], '\0'};
+
+    printf("Command: %s\n", cmd);
+
     switch (self->buf_in_use[0]) {
     case 'Z':
         res = handle_ready(self);
@@ -357,6 +752,15 @@ handle_message(BaseProt *self) {
         break;
     case 'S':
         res = handle_parameter_status(self);
+        break;
+    case 'T':
+        res = handle_row_description(self);
+        break;
+    case 'C':
+        res = handle_command_complete(self);
+        break;
+    case 'D':
+        res = handle_data_row(self);
         break;
     case 'n':  // NoData
     case '1':  // ParseComplete
@@ -391,6 +795,7 @@ BaseProt_startup(BaseProt *self,  PyObject *args) {
     int32_t msize;
     PyObject *ret;
 
+    printf("Starting yup\n");
     if (!PyArg_ParseTuple(
             args,"s#z#z#z#", &user, &user_len, &db,
             &db_len, &app, &app_len, &pwd, &pwd_len)) {
@@ -473,7 +878,7 @@ _BaseProt_buffer_updated(BaseProt *self, int nbytes) {
     int ret;
 
     if (self->receiving_header) {
-        length = read_int32(self->buf_in_use + 1);
+        length = get_int32(self->buf_in_use + 1);
         // TODO: check for negative msg_length;
 //        if (length < 4) {
 //                raise
@@ -528,6 +933,8 @@ BaseProt_buffer_updated(BaseProt *self, PyObject *args)
     if (_BaseProt_buffer_updated(self, nbytes) == -1) {
         // Something went wrong
         int is_protocol_error;
+
+        printf("Setting error\n");
 
         is_protocol_error = PyErr_ExceptionMatches(PoqaioProtocolError);
 
