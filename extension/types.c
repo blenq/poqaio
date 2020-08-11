@@ -3,7 +3,7 @@
 #include "types.h"
 
 
-PyObject *
+static PyObject *
 convert_long_result(BaseProt *self, char *data, int32_t size) {
     char *end;
     char bval[20];
@@ -68,11 +68,9 @@ convert_bool_result(BaseProt *self, char *data, int32_t size) {
     return NULL;
 }
 
-
-PyObject *
-convert_result_val(BaseProt *self, char *data, int32_t size, uint32_t oid) {
-    PyObject *(*converter)(BaseProt *, char *, int32_t);
-
+converter
+get_converter(uint32_t oid)
+{
     switch(oid) {
         case INT2OID:
         case INT4OID:
@@ -80,32 +78,16 @@ convert_result_val(BaseProt *self, char *data, int32_t size, uint32_t oid) {
         case OIDOID:
         case XIDOID:
         case CIDOID:
-            converter = convert_long_result;
-            break;
+            return convert_long_result;
         case FLOAT4OID:
         case FLOAT8OID:
-            converter = convert_float_result;
-            break;
+            return convert_float_result;
         case BOOLOID:
-            converter = convert_bool_result;
-            break;
+            return convert_bool_result;
         default:
-            converter = convert_text_result;
-            break;
+            return convert_text_result;
     }
-    return converter(self, data, size);
 }
-
-
-typedef struct {
-    PyObject *obj;
-    union {
-        int32_t val32;
-        int64_t val64;
-        char *valstr;
-    } val;
-    int type;
-} int_ctx_t;
 
 
 int write_int4(Param *param, char *dest) {

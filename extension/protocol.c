@@ -374,8 +374,8 @@ handle_row_description(BaseProt *self) {
         return -1;
     }
 
-    self->result_oids = PyMem_Malloc(sizeof(uint32_t) * nfields);
-    if (self->result_oids == NULL) {
+    self->converters = PyMem_Malloc(sizeof(converter) * nfields);
+    if (self->converters == NULL) {
         return -1;
     }
 
@@ -424,7 +424,6 @@ handle_row_description(BaseProt *self) {
             goto error;
         }
         PyStructSequence_SET_ITEM(field_desc, 1, field_val);
-        self->result_oids[i] = oid;
 
         // data type size
         field_val = read_py_int16(&pos);
@@ -446,6 +445,8 @@ handle_row_description(BaseProt *self) {
             goto error;
         }
         PyStructSequence_SET_ITEM(field_desc, 4, field_val);
+
+        self->converters[i] = get_converter(oid);
     }
 
     if (pos != MSG_END(self)) {
@@ -524,7 +525,7 @@ handle_data_row(BaseProt *self) {
                 goto error;
             }
 
-            val = convert_result_val(self, pos, val_size, self->result_oids[i]);
+            val = self->converters[i](self, pos, val_size);
             if (val == NULL) {
                 goto error;
             }
@@ -555,9 +556,9 @@ handle_command_complete(BaseProt *self) {
     char *pos;
     PyObject *py_val, *result, *results;
 
-    if (self->result_oids) {
-        PyMem_Free(self->result_oids);
-        self->result_oids = NULL;
+    if (self->converters) {
+        PyMem_Free(self->converters);
+        self->converters = NULL;
     }
     result = PyStructSequence_New(Result);
     if (result == NULL) {
@@ -852,7 +853,7 @@ PyObject *
 BaseProt_execute(BaseProt *self, PyObject *args) {
     char *query, *buf, *pos;
     Py_ssize_t query_len;
-    PyObject *py_params, *ret, *py_buf;
+    PyObject *py_params, *ret, *py_buf, *py_size;
     Py_ssize_t msg_size, num_params=0, i;
     int32_t msize;
 
@@ -876,10 +877,16 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
         // simple query
 
         msg_size = query_len + 6;  // query length + term zero + length + identifier
-        buf = PyMem_Malloc(msg_size);  // including identifier
-        if (buf == NULL) {
-            return PyErr_NoMemory();
+        py_size = PyLong_FromLong(msg_size);
+        if (py_size == NULL) {
+            return NULL;
         }
+        py_buf = PyByteArray_FromObject(py_size);
+        Py_DECREF(py_size);
+        if (py_buf == NULL) {
+            return NULL;
+        }
+        buf = PyByteArray_AS_STRING(py_buf);
         // write identifier
         buf[0] = 'Q';
         pos = buf + 1;
@@ -944,10 +951,21 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
         //     num_format_codes (2) + format_code (2)
 
         msg_size = 51 + 10 * num_params + query_len + value_size;
-        buf = PyMem_Malloc(msg_size);  // including identifier
-        if (buf == NULL) {
-            return PyErr_NoMemory();
+        py_size = PyLong_FromLong(msg_size);
+        if (py_size == NULL) {
+            return NULL;
         }
+        py_buf = PyByteArray_FromObject(py_size);
+        Py_DECREF(py_size);
+        if (py_buf == NULL) {
+            return NULL;
+        }
+        buf = PyByteArray_AS_STRING(py_buf);
+
+//        buf = PyMem_Malloc(msg_size);  // including identifier
+//        if (buf == NULL) {
+//            return PyErr_NoMemory();
+//        }
         // 0: Parse identifier
         buf[0] = 'P';
         pos = buf + 1;
@@ -1008,11 +1026,11 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
         }
         // 20 + querylen + 10 * num_params + param_values:
         //      Number of result format codes
-        val16 = (int16_t)htobe16(1);
-        outbuf_write(&pos, &val16, sizeof(val16));
+//        val16 = (int16_t)htobe16(1);
+        outbuf_write(&pos, "\0\x01", 2);
         // 22 + querylen + 10 * num_params + param_values: Result format codes
-        val16 = (int16_t)htobe16(0);
-        outbuf_write(&pos, &val16, sizeof(val16));
+//        val16 = (int16_t)htobe16(0);
+        outbuf_write(&pos, "\0\0", 2);
 
         // 24 + querylen + 10 * num_params + param_values: Final messages
         outbuf_write(&pos, fin, 27);
@@ -1027,9 +1045,8 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
     }
 
     // really send it
-    ret = PyObject_CallMethod(
-        self->transport, "write", "y#", buf, msg_size);
-    PyMem_Free(buf);
+    ret = PyObject_CallMethod(self->transport, "write", "O", py_buf);
+    Py_DECREF(py_buf);
     if (ret == NULL) {
         return NULL;
     }

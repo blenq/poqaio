@@ -69,18 +69,18 @@ result_converters = {
 
 
 class PGProtocol(BaseProt, asyncio.BufferedProtocol):
+#
+#     int_struct = struct.Struct('!i')
+#     intint_struct = struct.Struct('!ii')
+#     short_struct = struct.Struct('!h')
 
-    int_struct = struct.Struct('!i')
-    intint_struct = struct.Struct('!ii')
-    short_struct = struct.Struct('!h')
-
-    def __init__(self):
-        self.loop = asyncio.get_running_loop()
-#         self.received_bytes = 0
-
-        self.out_buffer = memoryview(bytearray(BUFFER_SIZE))
-#         self.results = None
-#         self.result = None
+#     def __init__(self):
+#         self.loop = asyncio.get_running_loop()
+# #         self.received_bytes = 0
+#
+#         self.out_buffer = memoryview(bytearray(BUFFER_SIZE))
+# #         self.results = None
+# #         self.result = None
 
     def connection_lost(self, exc):
         if self.error:
@@ -253,16 +253,16 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
 #             pos += field_struct.size
 #         if pos != msg_len:
 #             raise ProtocolError("Invalid row description")
-
-    def convert_data(self, value, field):
-        if field["format"] == 0:
-            converter = result_converters.get(field["type_oid"])
-            if converter is None:
-                value = decode(value)
-                return value
-            return converter(value)
-        else:
-            return bytes(value)
+#
+#     def convert_data(self, value, field):
+#         if field["format"] == 0:
+#             converter = result_converters.get(field["type_oid"])
+#             if converter is None:
+#                 value = decode(value)
+#                 return value
+#             return converter(value)
+#         else:
+#             return bytes(value)
 
 #     def handle_data_row(self):
 #         result = self.result
@@ -375,15 +375,15 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
 #         self.fut = self.loop.create_future()
 #         return self.fut
 
-    def get_wire_param(self, val):
-        converter = param_converters.get(type(val), convert_any_param)
-        oid, val = converter(val)
-        if not isinstance(val, bytes):
-            if isinstance(val, str):
-                val = val.encode()
-            else:
-                raise ValueError("Converter returned invalid type")
-        return oid, len(val), val, 0
+#     def get_wire_param(self, val):
+#         converter = param_converters.get(type(val), convert_any_param)
+#         oid, val = converter(val)
+#         if not isinstance(val, bytes):
+#             if isinstance(val, str):
+#                 val = val.encode()
+#             else:
+#                 raise ValueError("Converter returned invalid type")
+#         return oid, len(val), val, 0
 
 #     def execute(self, query, parameters):
 # #         self.results = None

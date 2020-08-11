@@ -1,4 +1,13 @@
-typedef struct {
+#ifndef POQAIO_PROTOCOL_H
+#define POQAIO_PROTOCOL_H
+
+typedef struct _BaseProt BaseProt;
+
+typedef PyObject *(*converter)(BaseProt *, char *, int32_t);
+
+converter get_converter(uint32_t);
+
+typedef struct _BaseProt {
     PyObject_HEAD
     char *in_buf;            // default receive buffer
     char *in_extra_buf;      // XL jumbo buffer, dynamically allocated
@@ -21,8 +30,9 @@ typedef struct {
     int16_t result_nfields;
     PyObject *results;
     PyObject *result_fields;
-    uint32_t *result_oids;
+//    uint32_t *result_oids;
     PyObject *result_data;
+    converter *converters;
 
     PyObject *error;
     PyObject *status_parameters;
@@ -32,3 +42,5 @@ typedef struct {
 } BaseProt;
 
 extern PyTypeObject BaseProtType;
+
+#endif

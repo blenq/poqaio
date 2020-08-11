@@ -1,4 +1,5 @@
-PyObject *convert_result_val(BaseProt *, char *, int32_t, uint32_t);
+#ifndef POQAIO_TYPES_H
+#define POQAIO_TYPES_H
 
 
 typedef struct _Param Param;
@@ -29,3 +30,5 @@ typedef struct _Param {
 } Param;
 
 int fill_param(Param *, PyObject *);
+
+#endif
