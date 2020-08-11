@@ -23,8 +23,10 @@ class Connection:
         self.database = database
         self.user = user
         self._application_name = application_name or fallback_application_name
+        self._execute_lock = asyncio.Lock()
 
     async def _startup(self, password):
+#         print("starting up")
         await self._protocol.startup(
             self.user, self.database, self._application_name, password)
 
@@ -65,7 +67,8 @@ class Connection:
         return self._protocol.status_parameters
 
     async def execute(self, query, parameters=None):
-        return await self._protocol.execute(query, parameters)
+        async with self._execute_lock:
+            return await self._protocol.execute(query, parameters)
 
     def close(self):
         self._protocol.close()
@@ -100,8 +103,9 @@ async def connect(
                     break
 
     if isinstance(host, os.PathLike):
-        path = host
-    elif host.startswith("/"):
+        host = os.fsdecode(host)
+
+    if host.startswith("/"):
         path = f"{host}{'' if host.endswith('/') else '/'}.s.PGSQL.{port}"
     else:
         path = None

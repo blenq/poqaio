@@ -102,43 +102,43 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
         if not self.fut.done():
             self.fut.set_result(result)
 
-    def check_length_equal(self, length):
-        if len(self.message) != length:
-            raise ProtocolError(
-                "Invalid length for message with identifier "
-                f"'{chr(self.identifier)}'. Expected {length}, but got"
-                f"{len(self.message)}.")
+#     def check_length_equal(self, length):
+#         if len(self.message) != length:
+#             raise ProtocolError(
+#                 "Invalid length for message with identifier "
+#                 f"'{chr(self.identifier)}'. Expected {length}, but got"
+#                 f"{len(self.message)}.")
 
-    def handle_auth_req(self):
-        # clear password from the object
-        password = self.password
-
-        specifier = self.int_struct.unpack_from(self.message)[0]
-        if specifier == 0:
-            self.check_length_equal(4)
-            return
-        if specifier == 5:
-            self.check_length_equal(8)
-            user = self.user
-            if password is None:
-                raise ProtocolError("Missing password")
-            salt = struct.unpack_from("4s", self.message, 4)[0]
-            if isinstance(password, str):
-                password = password.encode()
-            if isinstance(user, str):
-                user = user.encode()
-            password = (
-                b'md5' + hashlib.md5(
-                    hashlib.md5(password + user).hexdigest().encode() + salt
-                ).hexdigest().encode())
-
-            pw_len = len(password) + 1
-            struct_fmt = f'!ci{pw_len}s'
-            data = struct.pack(struct_fmt, b'p', pw_len + 4, password)
-            self.transport.write(data)
-            return
-        raise ProtocolError(
-            f"Unknown authentication specifier: {specifier}")
+#     def handle_auth_req(self):
+#         # clear password from the object
+#         password = self.password
+#
+#         specifier = self.int_struct.unpack_from(self.message)[0]
+#         if specifier == 0:
+#             self.check_length_equal(4)
+#             return
+#         if specifier == 5:
+#             self.check_length_equal(8)
+#             user = self.user
+#             if password is None:
+#                 raise ProtocolError("Missing password")
+#             salt = struct.unpack_from("4s", self.message, 4)[0]
+#             if isinstance(password, str):
+#                 password = password.encode()
+#             if isinstance(user, str):
+#                 user = user.encode()
+#             password = (
+#                 b'md5' + hashlib.md5(
+#                     hashlib.md5(password + user).hexdigest().encode() + salt
+#                 ).hexdigest().encode())
+#
+#             pw_len = len(password) + 1
+#             struct_fmt = f'!ci{pw_len}s'
+#             data = struct.pack(struct_fmt, b'p', pw_len + 4, password)
+#             self.transport.write(data)
+#             return
+#         raise ProtocolError(
+#             f"Unknown authentication specifier: {specifier}")
 
 #     def handle_ready(self):
 #         self.check_length_equal(1)
@@ -175,49 +175,49 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
 #         else:
 #             self.parameters[name] = val
 
-    def handle_error(self):
-        # format: "({error_field_code:char}{error_field_value}\0)+\0"
-        if self.message[-2:] != b'\0\0':
-            raise ProtocolError("Invalid Error Response")
-        messages = decode(self.message[:-2])
-        messages = {msg[:1]: msg[1:] for msg in messages.split('\0')}
-        ex_args = [None] * 17
+#     def handle_error(self):
+#         # format: "({error_field_code:char}{error_field_value}\0)+\0"
+#         if self.message[-2:] != b'\0\0':
+#             raise ProtocolError("Invalid Error Response")
+#         messages = decode(self.message[:-2])
+#         messages = {msg[:1]: msg[1:] for msg in messages.split('\0')}
+#         ex_args = [None] * 17
+#
+#         try:
+#             localized_severity = messages.pop('S')
+#         except KeyError:
+#             raise ProtocolError(
+#                 "Missing localized severity 'S' in Error Response")
+#         try:
+#             severity = messages.pop('V')
+#         except KeyError:
+#             # fallback to localized version (< 9.6) and hope it is in English
+#             severity = localized_severity
+#         try:
+#             severity = Severity(severity)
+#         except ValueError:
+#             severity = Severity.UNKNOWN
+#         ex_args[0] = severity
+#         for k, v in messages.items():
+#             if k in ('p', 'P', 'L'):
+#                 try:
+#                     v = int(v)
+#                 except Exception:
+#                     pass
+#             try:
+#                 idx = _error_fields[k]
+#             except KeyError:
+#                 continue
+#             ex_args[idx] = v
+#
+#         if ex_args[1] is None:
+#             raise ProtocolError("Missing code in Error Response")
+#         if ex_args[2] is None:
+#             raise ProtocolError("Missing message in Error Response")
+#         raise ServerError(ex_args)
 
-        try:
-            localized_severity = messages.pop('S')
-        except KeyError:
-            raise ProtocolError(
-                "Missing localized severity 'S' in Error Response")
-        try:
-            severity = messages.pop('V')
-        except KeyError:
-            # fallback to localized version (< 9.6) and hope it is in English
-            severity = localized_severity
-        try:
-            severity = Severity(severity)
-        except ValueError:
-            severity = Severity.UNKNOWN
-        ex_args[0] = severity
-        for k, v in messages.items():
-            if k in ('p', 'P', 'L'):
-                try:
-                    v = int(v)
-                except Exception:
-                    pass
-            try:
-                idx = _error_fields[k]
-            except KeyError:
-                continue
-            ex_args[idx] = v
-
-        if ex_args[1] is None:
-            raise ProtocolError("Missing code in Error Response")
-        if ex_args[2] is None:
-            raise ProtocolError("Missing message in Error Response")
-        raise ServerError(ex_args)
-
-    def handle_notice(self):
-        pass
+#     def handle_notice(self):
+#         pass
 
 #     def handle_row_description(self):
 #         fields = []
@@ -325,22 +325,22 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
 #     handle_message_50 = handle_bind_complete
 #     handle_message_67 = handle_command_complete
 #     handle_message_68 = handle_data_row
-    handle_message_69 = handle_error
-    handle_message_78 = handle_notice
-    handle_message_82 = handle_auth_req
+#     handle_message_69 = handle_error
+#     handle_message_78 = handle_notice
+#     handle_message_82 = handle_auth_req
 #     handle_message_83 = handle_parameter_status
 #     handle_message_84 = handle_row_description
 #     handle_message_110 = handle_no_data
 #     handle_message_90 = handle_ready
 
-    def handle_message(self):
-        handle_method = getattr(
-            self, f"handle_message_{self.identifier}", None)
-        if handle_method is None:
-            self.set_exception(
-                ValueError(f"Unknown identier: {chr(self.identifier)}"))
-            return
-        handle_method()
+#     def handle_message(self):
+#         handle_method = getattr(
+#             self, f"handle_message_{self.identifier}", None)
+#         if handle_method is None:
+#             self.set_exception(
+#                 ValueError(f"Unknown identier: {chr(self.identifier)}"))
+#             return
+#         handle_method()
 
 #     def startup(self, user, database, application_name, password):
 #         parameters = []
@@ -385,85 +385,85 @@ class PGProtocol(BaseProt, asyncio.BufferedProtocol):
                 raise ValueError("Converter returned invalid type")
         return oid, len(val), val, 0
 
-    def execute(self, query, parameters):
-#         self.results = None
-        query = query.encode()
-        query_len = len(query) + 1  # includes zero terminator
-
-        if parameters:
-            # extended query protocol
-            wire_params = []
-            for param in parameters:
-                if param is None:
-                    wire_params.append((0, -1, b'', 0))
-                else:
-                    wire_params.append(self.get_wire_param(param))
-            num_params = len(wire_params)
-
-            # Parse Message: 'P'(1) + size(4) + empty name (1) +
-            #    query string (len) + num_params (2) +
-            #    param_oids (4 * num_params)
-            parse_length = 7 + num_params * 4 + query_len  # without 'P'
-            struct_args = [b'P', parse_length, 0, query, num_params]
-            struct_args += [p[0] for p in wire_params]
-
-            struct_fmt = [f'!ciB{query_len}sh', 'I' * num_params]
-
-            # Bind Message: 'B'(1) + size(4) + empty portal name (1) +
-            #     empty statement name (1) + num_params (2) +
-            # parameter formats (2 * num_params) +
-            # num_params (2) +
-            # [param_length + param_value]* (4 * num_params + total_param_length)
-            # num_format_codes (2) + format_code (2)
-            total_param_length = sum(p[1] for p in wire_params if p[1] != -1)
-            bind_length = 14 + num_params * 6 + total_param_length
-            struct_args += [b'B', bind_length, b'\0\0', num_params]
-            struct_args += [p[3] for p in wire_params]
-            struct_args.append(num_params)
-            for p in wire_params:
-                struct_args.extend([p[1], p[2]])
-            struct_args += [1, 0]
-
-            struct_fmt += ['ci2sh', 'h' * num_params, 'h']
-            for p in wire_params:
-                if p[1] == -1:
-                    struct_fmt.append('i0s')
-                else:
-                    struct_fmt.append(f'i{p[1]}s')
-            struct_fmt.append('hh')
-
-            # Describe Message: 'D'(1) + size(4) + 'P'(1) +
-            #     empty portal name (1)
-            # Execute Message: 'E'(1) + size(4) + empty portal name (1) +
-            #     number of rows (4)
-            # Flush Message: 'H'(1) + size(4)
-            # Sync command\: 'S'(1) + size(4)
-            struct_args += [
-                b'D\0\0\0\x06P\0'  # describe
-                b'E\0\0\0\x09\0\0\0\0\0'  # execute
-                b'H\0\0\0\x04'  # flush
-                b'S\0\0\0\x04'  # sync
-            ]
-            struct_fmt.append("27s")
-
-            struct_fmt = ''.join(struct_fmt)
-        else:
-            # simple query protocol
-            content_length = query_len + 4  # including length and term zero
-            struct_fmt = f"!ci{query_len}s"
-            struct_args = [b'Q', content_length, query]
-
-        msg_struct = struct.Struct(struct_fmt)
-        msg_size = msg_struct.size
-        if msg_size > BUFFER_SIZE:
-            msg = msg_struct.pack(*struct_args)
-        else:
-            msg_struct.pack_into(self.out_buffer, 0, *struct_args)
-            msg = self.out_buffer[:msg_size]
-
-        self.transport.write(msg)
-        fut = self.fut = self.loop.create_future()
-        return fut
+#     def execute(self, query, parameters):
+# #         self.results = None
+#         query = query.encode()
+#         query_len = len(query) + 1  # includes zero terminator
+#
+#         if parameters:
+#             # extended query protocol
+#             wire_params = []
+#             for param in parameters:
+#                 if param is None:
+#                     wire_params.append((0, -1, b'', 0))
+#                 else:
+#                     wire_params.append(self.get_wire_param(param))
+#             num_params = len(wire_params)
+#
+#             # Parse Message: 'P'(1) + size(4) + empty name (1) +
+#             #    query string (len) + num_params (2) +
+#             #    param_oids (4 * num_params)
+#             parse_length = 7 + num_params * 4 + query_len  # without 'P'
+#             struct_args = [b'P', parse_length, 0, query, num_params]
+#             struct_args += [p[0] for p in wire_params]
+#
+#             struct_fmt = [f'!ciB{query_len}sh', 'I' * num_params]
+#
+#             # Bind Message: 'B'(1) + size(4) + empty portal name (1) +
+#             #     empty statement name (1) + num_params (2) +
+#             # parameter formats (2 * num_params) +
+#             # num_params (2) +
+#             # [param_length + param_value]* (4 * num_params + total_param_length)
+#             # num_format_codes (2) + format_code (2)
+#             total_param_length = sum(p[1] for p in wire_params if p[1] != -1)
+#             bind_length = 14 + num_params * 6 + total_param_length
+#             struct_args += [b'B', bind_length, b'\0\0', num_params]
+#             struct_args += [p[3] for p in wire_params]
+#             struct_args.append(num_params)
+#             for p in wire_params:
+#                 struct_args.extend([p[1], p[2]])
+#             struct_args += [1, 0]
+#
+#             struct_fmt += ['ci2sh', 'h' * num_params, 'h']
+#             for p in wire_params:
+#                 if p[1] == -1:
+#                     struct_fmt.append('i0s')
+#                 else:
+#                     struct_fmt.append(f'i{p[1]}s')
+#             struct_fmt.append('hh')
+#
+#             # Describe Message: 'D'(1) + size(4) + 'P'(1) +
+#             #     empty portal name (1)
+#             # Execute Message: 'E'(1) + size(4) + empty portal name (1) +
+#             #     number of rows (4)
+#             # Flush Message: 'H'(1) + size(4)
+#             # Sync command\: 'S'(1) + size(4)
+#             struct_args += [
+#                 b'D\0\0\0\x06P\0'  # describe
+#                 b'E\0\0\0\x09\0\0\0\0\0'  # execute
+#                 b'H\0\0\0\x04'  # flush
+#                 b'S\0\0\0\x04'  # sync
+#             ]
+#             struct_fmt.append("27s")
+#
+#             struct_fmt = ''.join(struct_fmt)
+#         else:
+#             # simple query protocol
+#             content_length = query_len + 4  # including length
+#             struct_fmt = f"!ci{query_len}s"
+#             struct_args = [b'Q', content_length, query]
+#
+#         msg_struct = struct.Struct(struct_fmt)
+#         msg_size = msg_struct.size
+#         if msg_size > BUFFER_SIZE:
+#             msg = msg_struct.pack(*struct_args)
+#         else:
+#             msg_struct.pack_into(self.out_buffer, 0, *struct_args)
+#             msg = self.out_buffer[:msg_size]
+#
+#         self.transport.write(msg)
+#         fut = self.fut = self.loop.create_future()
+#         return fut
 
     def close(self):
         transport = self.transport

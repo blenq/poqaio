@@ -28,7 +28,7 @@ PyInit__poqaio(void)
     PyStructSequence_Field fd_fields[] = {
         {"field_name", PyDoc_STR("field name")},
         {"type_oid", PyDoc_STR("type oid")},
-        {"type_size", PyDoc_STR("type size")},
+        {"field_size", PyDoc_STR("field size")},
         {"type_mod", PyDoc_STR("type modifier")},
         {"format", PyDoc_STR("field format")},
         {"table_oid", PyDoc_STR("table oid")},
