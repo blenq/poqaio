@@ -5,21 +5,17 @@
 
 static PyObject *
 convert_long_result(BaseProt *self, char *data, int32_t size) {
-    char *end;
-    char bval[20];
+
     PyObject *ret;
+    char *end;
+    char term;
 
-    if (size > 20) {
-        PyErr_SetString(PoqaioProtocolError, "Integer value too large");
-        return NULL;
-    }
+    term = data[size];
+    data[size] = '\0';
+    ret = PyLong_FromString(data, &end, 10);
+    data[size] = term;
 
-    // copy to add terminating zero
-    memcpy(bval, data, size);
-    bval[size] = '\0';
-
-    ret = PyLong_FromString(bval, &end, 10);
-    if (ret != NULL && end != bval + size) {
+    if (end != data + size && ret != NULL) {
         Py_DECREF(ret);
         PyErr_SetString(
             PoqaioProtocolError, "Remaining data when parsing integer value");

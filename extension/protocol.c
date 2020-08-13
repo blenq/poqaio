@@ -2,11 +2,16 @@
 #include "protocol.h"
 #include "types.h"
 
-#define BUF_SIZE 16384
+#define BUF_SIZE 16383
+//16383
 #define HEADER_SIZE 5
 #define MSG_BODY(prot) ((prot)->curr_msg + HEADER_SIZE)
 #define MSG_END(prot) ((prot)->curr_msg + (prot)->msg_length)
 #define RECEIVING_HEADER(prot) ((prot)->msg_length == HEADER_SIZE)
+
+
+_Py_IDENTIFIER(done);
+_Py_IDENTIFIER(set_result);
 
 
 static PyObject *
@@ -14,7 +19,8 @@ BaseProt_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
     BaseProt *self;
     char * in_buf=NULL;
-    PyObject *asyncio, *get_running_loop=NULL, *loop=NULL, *params=NULL;
+    PyObject *asyncio, *get_running_loop=NULL, *loop=NULL, *params=NULL,
+            *default_view, *create_future=NULL;
 
     self = (BaseProt *) type->tp_alloc(type, 0);
     if (self == NULL) {
@@ -43,18 +49,32 @@ BaseProt_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         goto error;
     }
 
+    create_future = PyObject_GetAttrString(loop, "create_future");
+    if (create_future == NULL) {
+        printf("Shit\n");
+        goto error;
+    }
+
     // set up buffer for receiving
-    in_buf = PyMem_Malloc(BUF_SIZE);
+    in_buf = PyMem_Malloc(BUF_SIZE + 1);
     if (in_buf == NULL) {
         PyErr_NoMemory();
+        goto error;
+    }
+
+    default_view = PyMemoryView_FromMemory(in_buf, BUF_SIZE, PyBUF_WRITE);
+    if (default_view == NULL) {
         goto error;
     }
 
     self->status_parameters = params;
     self->in_buf = in_buf;
     self->curr_msg = in_buf;
+    self->default_buf = default_view;
+
     self->msg_length = HEADER_SIZE;
     self->loop = loop;
+    self->create_future = create_future;
 
     return (PyObject *)self;
 
@@ -62,6 +82,10 @@ error:
     Py_DECREF(self);
     Py_XDECREF(params);
     Py_XDECREF(loop);
+    Py_XDECREF(create_future);
+    if (in_buf) {
+        PyMem_Free(in_buf);
+    }
     return NULL;
 }
 
@@ -78,15 +102,10 @@ BaseProt_dealloc(BaseProt *self)
 
 
 static PyObject *
-BaseProt_connection_made(BaseProt *self, PyObject *args) {
-    PyObject *transport;
-
-    transport = PyTuple_GetItem(args, 0);
-    if (transport == NULL) {
-        return NULL;
-    }
-//    printf("Connection made\n");
-    self->transport = transport;
+BaseProt_connection_made(BaseProt *self, PyObject *arg)
+{
+    self->transport = arg;
+    self->transport_write = PyObject_GetAttrString(arg, "write");
     Py_RETURN_NONE;
 }
 
@@ -454,10 +473,7 @@ handle_row_description(BaseProt *self) {
             PoqaioProtocolError, "Invalid field description, data remaining.");
         goto error;
     }
-    self->result_data = PyList_New(0);
-    if (self->result_data == NULL) {
-        goto error;
-    }
+
     self->result_nfields = nfields;
     self->result_fields = fields;
     return 0;
@@ -472,8 +488,8 @@ static int
 handle_data_row(BaseProt *self) {
     int i, ret=-1;
     char *pos;
-    int16_t nfields;
     PyObject *row;
+    int16_t nfields;
 
     if (self->error) {
         // Error already set, ignore message
@@ -486,10 +502,10 @@ handle_data_row(BaseProt *self) {
     }
 
     if (self->result_data == NULL) {
-        PyErr_SetString(
-            PoqaioProtocolError,
-            "Invalid state for data row."
-            );
+        self->result_data = PyList_New(0);
+        if (self->result_data == NULL) {
+            return -1;
+        }
     }
 
     pos = MSG_BODY(self);
@@ -536,7 +552,7 @@ handle_data_row(BaseProt *self) {
     }
     if (pos != MSG_END(self)) {
         PyErr_SetString(
-            PoqaioProtocolError, "Invalid field description, data remaining.");
+            PoqaioProtocolError, "Invalid data row message, data remaining.");
         goto error;
     }
 
@@ -600,6 +616,7 @@ handle_command_complete(BaseProt *self) {
     // add result to result list
     results = self->results;
     if (results == NULL) {
+        // no results yet, create result list with result
         results = PyList_New(1);
         if (results == NULL) {
             goto error;
@@ -608,6 +625,7 @@ handle_command_complete(BaseProt *self) {
         PyList_SET_ITEM(results, 0, result);
     }
     else {
+        // append result to existing list
         if (PyList_Append(results, result) == -1) {
             goto error;
         }
@@ -647,11 +665,12 @@ handle_ready(BaseProt *self) {
     PyObject *py_done;
     int done;
 
-    py_done = PyObject_CallMethod(self->fut, "done", NULL) ;
+    py_done = _PyObject_CallMethodIdObjArgs(self->fut, &PyId_done, NULL) ;
     if (py_done == NULL) {
         return -1;
     }
     done = PyObject_IsTrue(py_done);
+//    done = py_done == Py_True;
     Py_DECREF(py_done);
     PyObject *res;
 
@@ -683,8 +702,8 @@ handle_ready(BaseProt *self) {
                 result = self->results;
                 self->results = NULL;
             }
-            res = PyObject_CallMethod(
-                self->fut, "set_result", "O", result);
+            res = _PyObject_CallMethodIdObjArgs(
+                self->fut, &PyId_set_result, result, NULL);
             Py_DECREF(result);
 
             if (res == NULL) {
@@ -853,7 +872,7 @@ PyObject *
 BaseProt_execute(BaseProt *self, PyObject *args) {
     char *query, *buf, *pos;
     Py_ssize_t query_len;
-    PyObject *py_params, *ret, *py_buf, *py_size;
+    PyObject *py_params, *ret, *py_buf;
     Py_ssize_t msg_size, num_params=0, i;
     int32_t msize;
 
@@ -877,33 +896,30 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
         // simple query
 
         msg_size = query_len + 6;  // query length + term zero + length + identifier
-        py_size = PyLong_FromLong(msg_size);
-        if (py_size == NULL) {
-            return NULL;
-        }
-        py_buf = PyByteArray_FromObject(py_size);
-        Py_DECREF(py_size);
+        py_buf = PyBytes_FromStringAndSize(NULL, msg_size);
         if (py_buf == NULL) {
             return NULL;
         }
-        buf = PyByteArray_AS_STRING(py_buf);
+        buf = PyBytes_AS_STRING(py_buf);
+
         // write identifier
-        buf[0] = 'Q';
-        pos = buf + 1;
+        *buf++ = 'Q';
 
         // write msg length
         msize = (int32_t)htobe32((uint32_t)(msg_size - 1));
-        outbuf_write(&pos, &msize, sizeof(msize));
+        outbuf_write(&buf, &msize, sizeof(msize));
 
         // write query
-        outbuf_write(&pos, query, query_len);
-        pos[0] = '\0';
+        outbuf_write(&buf, query, query_len);
+        *buf = '\0';
     }
     else {
         Param *params;
         int32_t value_size = 0;
-        int16_t val16;
         uint32_t uval32;
+        int16_t val16;
+        PyObject **fast_params;
+
         static char fin[] = (
                 "D\0\0\0\x06P\0"         // describe
                 "E\0\0\0\x09\0\0\0\0\0"  // execute
@@ -926,8 +942,9 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
         }
 //        printf("Complex query 2\n");
 
+        fast_params = PySequence_Fast_ITEMS(py_params);
         for (i = 0; i < num_params; i++) {
-            PyObject *py_param =  PySequence_Fast_GET_ITEM(py_params, i);
+            PyObject *py_param =  fast_params[i];
             Param *param = params + i;
             if (fill_param(param, py_param) == -1) {
                 return NULL;
@@ -951,85 +968,75 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
         //     num_format_codes (2) + format_code (2)
 
         msg_size = 51 + 10 * num_params + query_len + value_size;
-        py_size = PyLong_FromLong(msg_size);
-        if (py_size == NULL) {
-            return NULL;
-        }
-        py_buf = PyByteArray_FromObject(py_size);
-        Py_DECREF(py_size);
+        py_buf = PyBytes_FromStringAndSize(NULL, msg_size);
         if (py_buf == NULL) {
             return NULL;
         }
-        buf = PyByteArray_AS_STRING(py_buf);
+        buf = PyBytes_AS_STRING(py_buf);
 
-//        buf = PyMem_Malloc(msg_size);  // including identifier
-//        if (buf == NULL) {
-//            return PyErr_NoMemory();
-//        }
         // 0: Parse identifier
         buf[0] = 'P';
         pos = buf + 1;
         // 1: Parse message size
-        msize = (int32_t)htobe32((uint32_t)(8 + query_len + 4 * num_params));
-        outbuf_write(&pos, &msize, sizeof(msize));
+        uval32 = htobe32(8 + query_len + 4 * num_params);
+        outbuf_write(&pos, &uval32, sizeof(uval32));
         // 5: Empty name
-        pos[0] = '\0';
-        pos++;
+        *pos++ = '\0';
         // 6: Query
         outbuf_write(&pos, query, query_len);
         // 6 + querylen: Query terminator
-        pos[0] = '\0';
-        pos++;
+        *pos++ = '\0';
         // 7 + querylen: Number of parameter oids
-        val16 = (int16_t)htobe16((uint16_t)num_params);
+        val16 = (int16_t)htobe16(num_params);
         outbuf_write(&pos, &val16, sizeof(val16));
         // 9 + querylen: Parameter oids
+
+        char *fmt_pos = buf + 18 + query_len + 4 * num_params;
+        char *val_pos = buf + 20 + query_len + 6 * num_params;
         for (i = 0; i < num_params; i++) {
-            uval32 = htobe32(params[i].oid);
+            Param *param = params + i;
+
+            uval32 = htobe32(param->oid);
             outbuf_write(&pos, &uval32, sizeof(uval32));
+
+            // parameter format
+            val16 = (int16_t)htobe16((uint16_t)params->format);
+            outbuf_write(&fmt_pos, &val16, sizeof(val16));
+
+            // parameter value
+            int32_t size = (int32_t)param->size;
+
+            msize = (int32_t)htobe32((uint32_t)size);
+            outbuf_write(&val_pos, &msize, sizeof(msize));
+            if (size > 0) {
+                param->write(param, val_pos);
+                val_pos += size;
+            }
         }
 
         // 9 + querylen + 4 * num_params: Bind identifier
-        pos[0] = 'B';
-        pos++;
+        *pos++ = 'B';
         // 10 + querylen + 4 * num_params: Bind message size
-        msize = (int32_t)htobe32((uint32_t)(14 + 6 * num_params + value_size));
-        outbuf_write(&pos, &msize, sizeof(msize));
+        uval32 = htobe32(14 + 6 * num_params + value_size);
+        outbuf_write(&pos, &uval32, sizeof(uval32));
         // 14 + querylen + 4 * num_params: Empty portal name
-        pos[0] = '\0';
-        pos++;
+        *pos++ = '\0';
         // 15 + querylen + 4 * num_params: Empty statement name
-        pos[0] = '\0';
-        pos++;
+        *pos++ = '\0';
         // 16 + querylen + 4 * num_params: Number of parameter formats
         val16 = (int16_t)htobe16((uint16_t)num_params);
         outbuf_write(&pos, &val16, sizeof(val16));
         // 18 + querylen + 4 * num_params: Parameter formats
-        for (i = 0; i < num_params; i++) {
-            val16 = (int16_t)htobe16((uint16_t)params[i].format);
-            outbuf_write(&pos, &val16, sizeof(val16));
-        }
+        pos += 2 * num_params;  // skip alread written formats
         // 18 + querylen + 6 * num_params: Number of parameter values
         val16 = (int16_t)htobe16((uint16_t)num_params);
         outbuf_write(&pos, &val16, sizeof(val16));
         // 20 + querylen + 6 * num_params: Parameter values
-        for (i = 0; i < num_params; i++) {
-            Param *param = params + i;
-            int32_t size = (int32_t)param->size;
-
-            msize = (int32_t)htobe32((uint32_t)size);
-            outbuf_write(&pos, &msize, sizeof(msize));
-            if (size > 0) {
-                param->write(param, pos);
-                pos += size;
-            }
-        }
+        pos += 4 * num_params + value_size; // skip already written values
         // 20 + querylen + 10 * num_params + param_values:
         //      Number of result format codes
-//        val16 = (int16_t)htobe16(1);
         outbuf_write(&pos, "\0\x01", 2);
         // 22 + querylen + 10 * num_params + param_values: Result format codes
-//        val16 = (int16_t)htobe16(0);
         outbuf_write(&pos, "\0\0", 2);
 
         // 24 + querylen + 10 * num_params + param_values: Final messages
@@ -1045,7 +1052,7 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
     }
 
     // really send it
-    ret = PyObject_CallMethod(self->transport, "write", "O", py_buf);
+    ret = PyObject_CallFunctionObjArgs(self->transport_write, py_buf, NULL);
     Py_DECREF(py_buf);
     if (ret == NULL) {
         return NULL;
@@ -1053,14 +1060,14 @@ BaseProt_execute(BaseProt *self, PyObject *args) {
     Py_DECREF(ret);
 
     // create a future to report on later
-    self->fut = PyObject_CallMethod(self->loop, "create_future", NULL);
+    self->fut = PyObject_CallFunctionObjArgs(self->create_future, NULL);
     return self->fut;
 
 }
 
 
 static PyObject *
-BaseProt_get_buffer(BaseProt *self, PyObject *args)
+BaseProt_get_buffer(BaseProt *self, PyObject *arg)
 {
 
     // A message must always fit entirely in a buffer. Easy for parsing.
@@ -1108,7 +1115,7 @@ _BaseProt_buffer_updated(BaseProt *self)
             // big buffer is needed
             char *buf;
 
-            buf = PyMem_Malloc(self->msg_length);
+            buf = PyMem_Malloc(self->msg_length + 1);
             if (buf == NULL) {
                 PyErr_NoMemory();
                 return -1;
@@ -1122,18 +1129,13 @@ _BaseProt_buffer_updated(BaseProt *self)
         }
 
         if (self->msg_length > self->received_bytes) {
-            // incomplete message
+            // incomplete message, we want more
             return 0;
         }
     }
-//    self->message = PyMemoryView_FromMemory(
-//        self->buf_in_use + HEADER_SIZE, self->msg_length - HEADER_SIZE,
-//        PyBUF_WRITE);
-
     ret = handle_message(self);
 
     // Done with message. Clean up
-//    Py_CLEAR(self->message);
     if (self->in_extra_buf) {
         // clear large buffer
         PyMem_Free(self->in_extra_buf);
@@ -1143,7 +1145,7 @@ _BaseProt_buffer_updated(BaseProt *self)
     }
     else {
         self->received_bytes -= self->msg_length;
-        self->curr_msg = self->curr_msg + self->msg_length;
+        self->curr_msg += self->msg_length;
     }
     self->msg_length = HEADER_SIZE;
     return ret;
@@ -1151,22 +1153,17 @@ _BaseProt_buffer_updated(BaseProt *self)
 
 
 static PyObject *
-BaseProt_buffer_updated(BaseProt *self, PyObject *args)
+BaseProt_buffer_updated(BaseProt *self, PyObject *arg)
 {
     // This is called from the transport when data is available. Raising
     // errors makes no sense, because those do not end up in user space.
     // Make sure to gather exceptions and store those for later to set them
     // on the future.
     long nbytes;
-    PyObject *py_nbytes;
 
 //    printf("Data received\n");
 
-    py_nbytes = PyTuple_GET_ITEM(args, 0);
-    if (py_nbytes == NULL) {
-        return NULL;
-    }
-    nbytes = PyLong_AsLong(py_nbytes);
+    nbytes = PyLong_AsLong(arg);
     if (nbytes == -1 && PyErr_Occurred()) {
         return NULL;
     }
@@ -1229,10 +1226,9 @@ BaseProt_buffer_updated(BaseProt *self, PyObject *args)
         }
     }
 
-    if (!self->in_extra_buf && self->curr_msg != self->in_buf) {
+    if (self->in_extra_buf == NULL && self->curr_msg != self->in_buf) {
         // Positioned after last handled message
         if (self->received_bytes) {
-//            printf("partial=======================\n");
             // Partial message, move to beginning
             memmove(self->in_buf, self->curr_msg, self->received_bytes);
         }
@@ -1260,13 +1256,13 @@ static PyMemberDef BaseProt_members[] = {
 
 
 static PyMethodDef BaseProt_methods[] = {
-    {"get_buffer", (PyCFunction) BaseProt_get_buffer, METH_VARARGS,
+    {"get_buffer", (PyCFunction) BaseProt_get_buffer, METH_O,
      "Return the name, combining the first and last name"
     },
-    {"buffer_updated", (PyCFunction) BaseProt_buffer_updated, METH_VARARGS,
+    {"buffer_updated", (PyCFunction) BaseProt_buffer_updated, METH_O,
      "buffer updated"
     },
-    {"connection_made", (PyCFunction) BaseProt_connection_made, METH_VARARGS,
+    {"connection_made", (PyCFunction) BaseProt_connection_made, METH_O,
      "connection made"
     },
     {"startup", (PyCFunction) BaseProt_startup, METH_VARARGS,

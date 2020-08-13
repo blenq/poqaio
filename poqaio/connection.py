@@ -18,6 +18,7 @@ class Connection:
             self, protocol, host, port, database, user, application_name,
             fallback_application_name):
         self._protocol = protocol
+        self._execute = self._protocol.execute
         self.host = host
         self.port = port
         self.database = database
@@ -68,10 +69,16 @@ class Connection:
 
     async def execute(self, query, parameters=None):
         async with self._execute_lock:
-            return await self._protocol.execute(query, parameters)
+            return await self._execute(query, parameters)
 
-    def close(self):
-        self._protocol.close()
+    async def close(self):
+        if self._execute_lock.locked():
+            try:
+                await self._protocol.abort()
+            except Exception:
+                pass
+        async with self._execute_lock:
+            self._protocol.close()
 
 
 async def connect(
